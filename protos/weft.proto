@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package weft;
+
+service CudaDriver {
+    rpc MemAlloc (Size) returns (DevicePointer) {}
+    rpc MemFree (DevicePointer) returns (Empty) {}
+    rpc MemcpyHtoD (stream MemoryWrite) returns (Empty) {}
+    rpc MemcpyDtoH (MemoryRead) returns (stream MemoryChunk) {}
+
+    rpc ModuleGetFunction (FunctionMetadata) returns (Function) {}
+    rpc ModuleLoadData (PTX) returns (Module) {}
+
+    rpc LaunchKernel (KernelLaunch) returns (Empty) {}
+}
+
+message Empty {} // FIXME: Import error in toolchain for google.protobuf.Empty
+
+message Size {
+    uint64 size = 1;
+}
+
+message DevicePointer {
+    uint64 handle = 1;
+}
+
+message MemoryChunk {
+    bytes data = 1;
+}
+
+message MemoryWrite {
+    oneof upload_payload {
+        DevicePointer dptr = 1;
+        MemoryChunk chunk = 2;
+    }
+}
+
+message MemoryRead {
+    DevicePointer dptr = 1;
+    Size size = 2;
+}
+
+message Module {
+    uint64 handle = 1;
+}
+
+message Function {
+    uint64 handle = 1;
+}
+
+message FunctionMetadata {
+    message Param {
+        uint64 size = 1;
+        bool is_pointer = 2;
+        bool is_const = 3;
+        bytes data = 4;
+    }
+    Module module = 1;
+    string function_name = 2;
+    repeated Param params = 3;
+}
+
+message PTX {
+    string str = 1;
+}
+
+message KernelLaunch {
+    uint64 f = 1;
+    uint32 gridDimX = 2;
+    uint32 gridDimY = 3;
+    uint32 gridDimZ = 4;
+    uint32 blockDimX = 5;
+    uint32 blockDimY = 6;
+    uint32 blockDimZ = 7;
+    uint32 sharedMemBytes = 8;
+    uint64 hStream = 9;
+    repeated FunctionMetadata.Param params = 10;
+}

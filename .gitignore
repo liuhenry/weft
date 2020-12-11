@@ -1,0 +1,6 @@
+.vscode/**
+
+extern/include/CUDA/**
+build/**
+
+*.o
