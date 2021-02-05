@@ -24,7 +24,10 @@ bool KernelVisitor::VisitFunctionDecl(clang::FunctionDecl* func) {
   if (func->getNumParams()) {
     metadata_.emplace(name, std::make_shared<std::vector<Param>>());
     for (auto const& parm : func->parameters()) {
-      metadata_.at(name)->emplace_back(parm);
+      // Exclude _weft parameters
+      if (parm->getQualifiedNameAsString().rfind("_weft", 0)) {
+        metadata_.at(name)->emplace_back(parm);
+      }
     }
   }
   return true;

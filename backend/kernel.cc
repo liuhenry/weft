@@ -1,22 +1,14 @@
 #include "kernel.h"
 
 #include <cuda.h>
-#include <google/protobuf/repeated_field.h>
 
 #include <boost/range/adaptor/indexed.hpp>
 #include <functional>
-#include <iostream>
 #include <random>
-#include <stdexcept>
 #include <unordered_map>
 
 #include "CUDA_samples/helper_cuda_drvapi.h"
 #include "memory.h"
-#include "weft.grpc.pb.h"
-
-using google::protobuf::RepeatedPtrField;
-using weft::FunctionMetadata_Param;
-
 namespace weft::kernel {
 
 static std::unordered_map<uint64_t, Module> modules;
@@ -54,63 +46,69 @@ const Function& add_function(uint64_t m_handle, std::string name,
   return functions.at(f_handle);
 }
 
-void Function::Launch(
-    uint32_t gridDimX, uint32_t gridDimY, uint32_t gridDimZ, uint32_t blockDimX,
-    uint32_t blockDimY, uint32_t blockDimZ, uint32_t sharedMemBytes,
-    const RepeatedPtrField<FunctionMetadata_Param>& params) const {
-  std::clog << "> LaunchKernel: " << handle_ << " (" << name_ << ")\n"
-            << "\t Grid — X: " << gridDimX << ", Y: " << gridDimY
-            << ", Z: " << gridDimZ << "\n"
-            << "\t Block — X: " << blockDimX << ", Y: " << blockDimY
-            << ", Z: " << blockDimZ << "\n"
-            << "\t Shared Memory: " << sharedMemBytes << "\n";
+void Function::execute(Device& device, const ExecutionArgs execution) const {
+  checkCudaErrors(cuCtxSetCurrent(device));
 
-  CUdevice device;
-  CUmodule module;
-  CUcontext cu_context;
-  CUfunction kernel_addr;
+  device.stream_pool.consume_one([&](const CUstream& stream) -> void {
+    std::clog << "> LaunchKernel: " << this->handle() << " (" << this->name()
+              << ") on Device: " << device << ", Stream: " << stream << "\n"
+              << "\t Grid — X: " << execution.gridDimX
+              << ", Y: " << execution.gridDimY << ", Z: " << execution.gridDimZ
+              << "\n"
+              << "\t Block — X: " << execution.blockDimX
+              << ", Y: " << execution.blockDimY
+              << ", Z: " << execution.blockDimZ << "\n"
+              << "\t Shared Memory: " << execution.sharedMemBytes << "\n";
 
-  checkCudaErrors(cuDeviceGet(&device, 1));  // FIXME: schedule onto second GPU
-  checkCudaErrors(cuCtxCreate(&cu_context, 0, device));
+    CUmodule module;
+    checkCudaErrors(
+        cuModuleLoadDataEx(&module, this->module().ptx().c_str(), 0, 0, 0));
+    CUfunction kernel_addr;
+    checkCudaErrors(
+        cuModuleGetFunction(&kernel_addr, module, this->name().c_str()));
 
-  checkCudaErrors(cuModuleLoadDataEx(&module, module_.ptx().c_str(), 0, 0, 0));
-  checkCudaErrors(cuModuleGetFunction(&kernel_addr, module, name_.c_str()));
+    std::vector<void*> args;
+    for (const auto& param : execution.args | boost::adaptors::indexed(0)) {
+      void* ptr;
+      if (param.value().is_pointer()) {
+        auto& block = memory::get_block(*reinterpret_cast<uint64_t*>(
+            const_cast<char*>(param.value().data().c_str())));
+        auto d_ptr = block.device_ptr(device);  // Also cuMalloc's if we haven't
 
-  std::vector<void*> args;
-  for (const auto& param : params | boost::adaptors::indexed(0)) {
-    void* ptr;
-    if (param.value().is_pointer()) {
-      auto& block = memory::get_block(*reinterpret_cast<uint64_t*>(
-          const_cast<char*>(param.value().data().c_str())));
-      auto d_ptr = block.device_ptr(device);  // Also cuMalloc's if we haven't
-      if (param.value().is_const()) {
-        checkCudaErrors(cuMemcpyHtoD(*d_ptr, block.data(), block.size()));
+        // NOTE: we'll also copy the const pointed data
+        // This allows us to perform the later consistency check on
+        // read-back if (param.value().is_const()) {
+        checkCudaErrors(
+            cuMemcpyHtoDAsync(*d_ptr, block.data(), block.size(), stream));
+        // }
+        ptr = reinterpret_cast<void*>(d_ptr);
+      } else {
+        ptr = reinterpret_cast<void*>(
+            const_cast<char*>(param.value().data().c_str()));
       }
-      ptr = reinterpret_cast<void*>(d_ptr);
-    } else {
-      ptr = reinterpret_cast<void*>(
-          const_cast<char*>(param.value().data().c_str()));
+      args.emplace_back(ptr);
+
+      std::clog << "\t " << param.index() << " - Size: " << param.value().size()
+                << ", Pointer: " << param.value().is_pointer()
+                << ", Const: " << param.value().is_const() << "\n";
     }
-    args.emplace_back(ptr);
 
-    std::clog << "\t " << param.index() << " - Size: " << param.value().size()
-              << ", Pointer: " << param.value().is_pointer()
-              << ", Const: " << param.value().is_const() << "\n";
-  }
+    // Add _weft_blockOffset (assume last)
+    args.emplace_back(const_cast<int*>(&execution.blockOffset));
 
-  checkCudaErrors(cuLaunchKernel(kernel_addr, gridDimX, gridDimY, gridDimZ,
-                                 blockDimX, blockDimY, blockDimZ,
-                                 sharedMemBytes, 0, args.data(), nullptr));
-  checkCudaErrors(cuCtxSynchronize());
+    checkCudaErrors(cuLaunchKernel(
+        kernel_addr, execution.gridDimX, execution.gridDimY, execution.gridDimZ,
+        execution.blockDimX, execution.blockDimY, execution.blockDimZ,
+        execution.sharedMemBytes, stream, args.data(), nullptr));
 
-  for (const auto& param : params) {
-    if (param.is_pointer() && !param.is_const()) {
-      auto& block = memory::get_block(*reinterpret_cast<uint64_t*>(
-          const_cast<char*>(param.data().c_str())));
-      auto d_ptr = block.device_ptr(device);
-      checkCudaErrors(cuMemcpyDtoH(block.data(), *d_ptr, block.size()));
+    for (const auto& param : execution.args) {
+      if (param.is_pointer() && !param.is_const()) {
+        memory::get_block(*reinterpret_cast<uint64_t*>(
+                              const_cast<char*>(param.data().c_str())))
+            .write_back(device, stream);
+      }
     }
-  }
+  });
 }
 
 }  // namespace weft::kernel

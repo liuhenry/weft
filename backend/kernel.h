@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "device.h"
 #include "weft.grpc.pb.h"
 
 namespace weft::kernel {
@@ -34,6 +35,29 @@ struct Param {
       : size{size}, is_pointer{is_pointer}, is_const{is_const} {}
 };
 
+struct ExecutionArgs {
+  uint32_t gridDimX;
+  uint32_t gridDimY;
+  uint32_t gridDimZ;
+  uint32_t blockDimX;
+  uint32_t blockDimY;
+  uint32_t blockDimZ;
+  uint32_t sharedMemBytes;
+  const google::protobuf::RepeatedPtrField<weft::FunctionMetadata_Param> &args;
+  int blockOffset;
+
+  ExecutionArgs(const KernelLaunch &request)
+      : gridDimX{request.griddimx()},
+        gridDimY{request.griddimy()},
+        gridDimZ{request.griddimz()},
+        blockDimX{request.blockdimx()},
+        blockDimY{request.blockdimy()},
+        blockDimZ{request.blockdimz()},
+        sharedMemBytes{request.sharedmembytes()},
+        args{request.params()},
+        blockOffset{0} {}
+};
+
 class Function {
  public:
   Function(uint64_t handle, const Module &module, std::string name,
@@ -43,17 +67,12 @@ class Function {
         name_{std::move(name)},
         params_{std::move(params)} {}
 
-  void Launch(
-      uint32_t gridDimX, uint32_t gridDimY, uint32_t gridDimZ,
-      uint32_t blockDimX, uint32_t blockDimY, uint32_t blockDimZ,
-      uint32_t sharedMemBytes,
-      const google::protobuf::RepeatedPtrField<weft::FunctionMetadata_Param>
-          &params) const;
-
   constexpr uint64_t handle() const noexcept { return handle_; }
   const Module &module() const noexcept { return module_; }
   std::string name() const noexcept { return name_; }
   const std::vector<Param> &params() const noexcept { return params_; }
+
+  void execute(Device &device, const ExecutionArgs execution) const;
 
  private:
   uint64_t handle_;

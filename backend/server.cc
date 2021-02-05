@@ -13,6 +13,7 @@
 #include "device.h"
 #include "kernel.h"
 #include "memory.h"
+#include "weft.grpc.pb.h"
 
 namespace weft {
 
@@ -24,13 +25,6 @@ using grpc::ServerWriter;
 using grpc::Status;
 
 constexpr size_t chunk_size = 64 * 1024;
-
-CudaDriverImpl::CudaDriverImpl()
-    : device_count_{CuInitialize()}, devices_{new Device[device_count_]} {
-  for (int i = 0; i < device_count_; i++) {
-    devices_[i] = Device{i};
-  }
-}
 
 Status CudaDriverImpl::MemAlloc(ServerContext* context, const Size* request,
                                 DevicePointer* response) {
@@ -118,50 +112,11 @@ Status CudaDriverImpl::ModuleLoadData(ServerContext* context,
 Status CudaDriverImpl::LaunchKernel(ServerContext* context,
                                     const KernelLaunch* request,
                                     Empty* /*empty*/) {
-  auto f = request->f();
-  auto gridDimX = request->griddimx();
-  auto gridDimY = request->griddimy();
-  auto gridDimZ = request->griddimz();
-  auto blockDimX = request->blockdimx();
-  auto blockDimY = request->blockdimy();
-  auto blockDimZ = request->blockdimz();
-  auto sharedMemBytes = request->sharedmembytes();
-  auto hStream = request->hstream();
-
-  kernel::get_function(f).Launch(gridDimX, gridDimY, gridDimZ, blockDimX,
-                                 blockDimY, blockDimZ, sharedMemBytes,
-                                 request->params());
+  auto func = kernel::get_function(request->f());
+  const kernel::ExecutionArgs execution{*request};
+  scheduler_.schedule(func, execution);
 
   return Status::OK;
-}
-
-int CudaDriverImpl::CuInitialize() {
-  CUresult error_id = cuInit(0);
-
-  if (error_id != CUDA_SUCCESS) {
-    std::cerr << "cuInit(0) returned " << error_id << "\n-> "
-              << getCudaDrvErrorString(error_id) << "\n";
-    std::cerr << "Result = FAIL\n";
-    exit(EXIT_FAILURE);
-  }
-
-  int device_count;
-  error_id = cuDeviceGetCount(&device_count);
-
-  if (error_id != CUDA_SUCCESS) {
-    std::cerr << "cuDeviceGetCount returned " << error_id << "\n-> "
-              << getCudaDrvErrorString(error_id) << "\n";
-    std::cerr << "Result = FAIL\n";
-    exit(EXIT_FAILURE);
-  }
-
-  if (device_count == 0) {
-    std::clog << "There are no available device(s) that support CUDA\n";
-  } else {
-    std::clog << "Detected " << device_count << " CUDA Capable device(s)\n";
-  }
-
-  return device_count;
 }
 
 }  // namespace weft

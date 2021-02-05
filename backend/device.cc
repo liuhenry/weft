@@ -5,49 +5,66 @@
 #include <iostream>
 
 #include "CUDA_samples/helper_cuda_drvapi.h"
+#include "weft.grpc.pb.h"
 
+using google::protobuf::RepeatedPtrField;
+using weft::FunctionMetadata_Param;
 namespace weft {
 
-Device::Device(int device_idx)
-    : initialized_{true}, device_idx_{device_idx}, context_{} {
-  checkCudaErrors(cuDeviceGet(&device_, device_idx_));
+inline int get_max_concurrency_from_version(int major, int minor) {
+  // Refer to ConvertSMVer2Cores
+  typedef struct {
+    int CC;  // 0xMm (hexidecimal notation), M = CC Major version,
+    // and m = CC minor version
+    int MaxConcurrency;
+  } sCCtoConcurrency;
 
-  checkCudaErrors(
-      cuDeviceGetName(&device_name_[0], device_name_.size(), device_));
+  sCCtoConcurrency maxGpuArchKernelConcurrency[] = {
+      {0x35, 32},  {0x37, 32},  {0x50, 32},  {0x52, 32},  {0x53, 16},
+      {0x60, 128}, {0x61, 32},  {0x62, 16},  {0x70, 128}, {0x72, 16},
+      {0x75, 128}, {0x80, 128}, {0x86, 128}, {-1, -1}};
 
-  int major = 0, minor = 0;
-  checkCudaErrors(cuDeviceComputeCapability(&major, &minor, device_));
-  checkCudaErrors(cuDeviceGetProperties(&device_props_, device_));
-  std::clog << "Device " << device_idx_ << ": \"" << device_name_
-            << "\" (Compute " << major << "." << minor << ")\n";
-  std::clog << "\tsharedMemPerBlock: " << device_props_.sharedMemPerBlock
-            << "\n";
-  std::clog << "\tconstantMemory   : " << device_props_.totalConstantMemory
-            << "\n";
-  std::clog << "\tregsPerBlock     : " << device_props_.regsPerBlock << "\n";
-  std::clog << "\tclockRate        : " << device_props_.clockRate << "\n";
-  std::clog << "\n";
-}
+  int index = 0;
 
-Context::Context(Device *device) : initialized_(true), device_(device) {
-  checkCudaErrors(cuCtxCreate(&context_, CU_CTX_SCHED_AUTO, *device_));
-  checkCudaErrors(cuCtxPopCurrent(nullptr));
+  while (maxGpuArchKernelConcurrency[index].CC != -1) {
+    if (maxGpuArchKernelConcurrency[index].CC == ((major << 4) + minor)) {
+      return maxGpuArchKernelConcurrency[index].MaxConcurrency;
+    }
 
-  thread_ = std::thread(&Context::Loop, this);
-  std::clog << "<CUDA Device=" << *device_ << ", Context=" << *this
-            << ", Thread=" << thread_.get_id()
-            << "> - Context::Loop() Launched...\n";
-}
-
-Context::~Context() {
-  if (thread_.joinable()) thread_.join();
-  if (initialized_) cuCtxDestroy(context_);
-}
-
-void Context::Loop() {
-  checkCudaErrors(cuCtxPushCurrent(context_));
-  while (true) {
+    index++;
   }
 }
+
+Device::Device(int device_idx) : device_idx_{device_idx} {
+  checkCudaErrors(cuDeviceGet(&device_, device_idx_));
+  checkCudaErrors(
+      cuDeviceGetName(device_name_.data(), device_name_.size(), device_));
+
+  checkCudaErrors(cuDeviceGetAttribute(
+      &compute_capability_major_, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+      device_));
+  checkCudaErrors(cuDeviceGetAttribute(
+      &compute_capability_minor_, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+      device_));
+
+  max_concurrent_kernels_ = get_max_concurrency_from_version(
+      compute_capability_major_, compute_capability_minor_);
+
+  std::clog << "Device " << device_idx_ << ": \"" << device_name_
+            << "\" (Compute " << compute_capability_major_ << "."
+            << compute_capability_minor_ << " — "
+            << "Max Kernel Concurrency: " << max_concurrent_kernels_ << ")\n";
+
+  checkCudaErrors(cuDevicePrimaryCtxRetain(&context_, device_));
+  checkCudaErrors(cuCtxSetCurrent(context_));
+
+  for (int i = 0; i < max_concurrent_kernels_; i++) {
+    CUstream stream;
+    checkCudaErrors(cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+    stream_pool.bounded_push(std::move(stream));
+  }
+}
+
+Device::~Device() { checkCudaErrors(cuDevicePrimaryCtxRelease(device_)); }
 
 }  // namespace weft

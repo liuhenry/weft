@@ -5,9 +5,11 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <unordered_map>
 
+#include "CUDA_samples/helper_cuda_drvapi.h"
 namespace weft::memory {
 
 static std::unordered_map<uint64_t, Block> mmap;
@@ -19,6 +21,27 @@ CUdeviceptr* Block::device_ptr(CUdevice device) {
   auto* ptr = &device_ptrs_[device];
   if (!*ptr) cuMemAlloc(ptr, size_);
   return ptr;
+}
+
+void Block::write_back(const CUdevice& device, const CUstream& stream) {
+  auto* d_ptr = &device_ptrs_[device];
+
+  // Thread-safe copy original
+  std::call_once(orig_data_init_, [&]() {
+    orig_data_ = std::make_unique<unsigned char[]>(size_);
+    std::memcpy(orig_data_.get(), data_.get(), size_);
+  });
+
+  // Copy to temp buffer
+  auto buf = std::make_unique<unsigned char[]>(size_);
+  checkCudaErrors(cuMemcpyDtoHAsync(buf.get(), *d_ptr, size_, stream));
+
+  // Check consistency and perform real copy
+  for (size_t i = 0; i < size_; ++i) {
+    if (orig_data_.get()[i] != buf[i]) {
+      data_.get()[i] = buf[i];
+    }
+  }
 }
 
 uint64_t malloc(size_t size) {

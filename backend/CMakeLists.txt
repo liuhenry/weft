@@ -10,6 +10,7 @@ add_library(backend OBJECT
   device.cc
   kernel.cc
   memory.cc
+  scheduler.cc
   server.cc)
 target_include_directories(backend PUBLIC
   Boost_INCLUDE_DIRS

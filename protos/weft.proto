@@ -51,9 +51,10 @@ message Function {
 message FunctionMetadata {
     message Param {
         uint64 size = 1;
-        bool is_pointer = 2;
-        bool is_const = 3;
-        bytes data = 4;
+        uint64 pointee_size = 2;
+        bool is_pointer = 3;
+        bool is_const = 4;
+        bytes data = 5;
     }
     Module module = 1;
     string function_name = 2;

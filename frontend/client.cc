@@ -157,6 +157,7 @@ void CudaDriverClient::LaunchKernel(
   for (const auto &param : metadata | boost::adaptors::indexed(0)) {
     auto request_param = request.add_params();
     request_param->set_size(param.value().size());
+    request_param->set_pointee_size(param.value().pointee_size());
     request_param->set_is_pointer(param.value().is_pointer());
     request_param->set_is_const(param.value().is_const());
     request_param->set_data(kernelParams[param.index()], param.value().size());

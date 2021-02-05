@@ -18,6 +18,7 @@ class Param {
   Param(const clang::ParmVarDecl* parm);
 
   constexpr size_t size() const noexcept { return size_; }
+  constexpr size_t pointee_size() const noexcept { return pointee_size_; }
   constexpr bool is_pointer() const noexcept { return is_pointer_; }
   constexpr bool is_const() const noexcept { return is_const_; }
 
@@ -29,6 +30,7 @@ class Param {
   std::string qualified_name_;
   std::string type_;
   size_t size_;
+  size_t pointee_size_;
   bool is_pointer_;
   bool is_const_;
 };

@@ -19,6 +19,7 @@
 
 #include <stdio.h>
 
+#include <chrono>
 #include <cmath>
 
 // For the CUDA runtime routines (prefixed with "cuda_")
@@ -94,15 +95,18 @@ int main(int argc, char **argv) {
   dim3 cudaBlockSize(threadsPerBlock, 1, 1);
   dim3 cudaGridSize(blocksPerGrid, 1, 1);
 
+  int _weft_blockOffset = 0;
   void *arr[] = {reinterpret_cast<void *>(&d_A), reinterpret_cast<void *>(&d_B),
                  reinterpret_cast<void *>(&d_C),
-                 reinterpret_cast<void *>(&numElements)};
+                 reinterpret_cast<void *>(&numElements),
+                 reinterpret_cast<void *>(&_weft_blockOffset)};
 
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
   cudaEventRecord(start);
+  auto t_start = std::chrono::high_resolution_clock::now();
   checkCudaErrors(cuLaunchKernel(kernel_addr, cudaGridSize.x, cudaGridSize.y,
                                  cudaGridSize.z, /* grid dim */
                                  cudaBlockSize.x, cudaBlockSize.y,
@@ -112,9 +116,12 @@ int main(int argc, char **argv) {
                                  0));
   checkCudaErrors(cuCtxSynchronize());
   cudaEventRecord(stop);
+  auto t_end = std::chrono::high_resolution_clock::now();
 
-  float elapsed_time_ms = 0;
-  cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+  double elapsed_time_ms =
+      std::chrono::duration<double, std::milli>(t_end - t_start).count();
+  // float elapsed_time_ms = 0;
+  // cudaEventElapsedTime(&elapsed_time_ms, start, stop);
   printf("Elapsed time: %f\n", elapsed_time_ms);
 
   // Copy the device result vector in device memory to the host result vector

@@ -5,15 +5,13 @@
 #include <grpcpp/server.h>
 #include <grpcpp/server_context.h>
 
-#include "device.h"
+#include "scheduler.h"
 #include "weft.grpc.pb.h"
 
 namespace weft {
 
 class CudaDriverImpl final : public CudaDriver::Service {
  public:
-  CudaDriverImpl();
-
   grpc::Status MemAlloc(grpc::ServerContext* context, const Size* request,
                         DevicePointer* response) override;
   grpc::Status MemFree(grpc::ServerContext* context,
@@ -37,10 +35,7 @@ class CudaDriverImpl final : public CudaDriver::Service {
                             Empty* /*response*/) override;
 
  private:
-  int device_count_;
-  std::unique_ptr<Device[]> devices_;
-
-  int CuInitialize();
+  Scheduler scheduler_;
 };
 
 }  // namespace weft
