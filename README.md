@@ -8,7 +8,7 @@ The frontend additionally depends on clang (also included via `FetchContent` - L
 
 ```
 mkdir build && cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make server weft
 ```
 
